@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Mundial Interactivo 3D Vector</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- D3.js and TopoJSON for World Map rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #f3f4f6;
+            overflow-x: hidden;
+        }
+
+        /* Styling for 3D extrude shadow look like the user image */
+        .map-container {
+            perspective: 1000px;
+        }
+
+        .svg-world {
+            filter: drop-shadow(0px 15px 20px rgba(0, 0, 0, 0.12)) drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.08));
+            transition: transform 0.3s ease;
+        }
+
+        .country-path {
+            fill: #ffffff;
+            stroke: #d1d5db;
+            stroke-width: 0.6px;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            outline: none;
+        }
+
+        .country-path:hover {
+            stroke: #2563eb;
+            stroke-width: 1.5px;
+            filter: drop-shadow(0px 8px 12px rgba(0, 0, 0, 0.2));
+        }
+
+        .country-path.active {
+            stroke: #1d4ed8;
+            stroke-width: 2px;
+        }
+
+        /* Tooltip style */
+        .map-tooltip {
+            position: absolute;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            transform: translate(-50%, -110%);
+            z-index: 50;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    
+
+        html, body { background: transparent !important; }
+        body { overflow: hidden !important; }
+        header, #zoomInBtn, #zoomOutBtn, #resetZoomBtn, #infoPanel, #tooltip, #searchResults, #searchInput,
+        .map-container > .absolute.top-4.left-4 { display: none !important; }
+        .map-container { perspective: none; background: transparent !important; }
+        #loading { display:none !important; }
+        #worldMap { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; }
+        #mapBaseImage { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: 1; pointer-events: none; }
+        .svg-world { filter: none; }
+        .country-path {
+            fill: rgba(255,255,255,0.001);
+            stroke: transparent;
+            stroke-width: 0.8px;
+            cursor: default;
+        }
+        .country-path.supported { cursor: pointer; }
+        .country-path:hover,
+        .country-path.highlighted {
+            fill: rgba(214,168,79,0.08);
+            stroke: #d6a84f;
+            stroke-width: 1.5px;
+            filter: none;
+        }
+        .language-panel {
+            position: absolute;
+            left: 50%;
+            bottom: 18px;
+            transform: translateX(-50%);
+            z-index: 10;
+            min-width: 250px;
+            max-width: calc(100% - 32px);
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            padding: 12px 15px;
+            background: rgba(16,28,23,.94);
+            color: #f5f2e9;
+            border: 1px solid rgba(214,168,79,.55);
+            border-radius: 4px;
+            box-shadow: 0 12px 30px rgba(0,0,0,.22);
+        }
+        .language-panel.hidden { display:none !important; }
+        .language-panel-kicker { font-size: 8px; letter-spacing: .16em; text-transform: uppercase; color:#d6a84f; }
+        .language-panel strong { font: 400 20px/1.1 Georgia, serif; }
+        .language-panel span:last-child { font-size: 11px; color:rgba(245,242,233,.82); }
+
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col bg-slate-100 text-slate-800 overflow-hidden select-none">
+
+    <header class="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 px-6 flex items-center justify-between z-20 shrink-0">
+        <div class="flex items-center space-x-3">
+            <div class="p-2 bg-blue-600 text-white rounded-xl shadow-md shadow-blue-500/20">
+                <i data-lucide="globe_2" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg text-slate-900 leading-tight">WorldMap3D <span class="text-xs bg-blue-100 text-blue-700 font-semibold px-2 py-0.5 rounded-full ml-1">Interactive</span></h1>
+                <p class="text-xs text-slate-500">Pasa el cursor sobre los países para explorarlos</p>
+            </div>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="relative w-72 md:w-96">
+            <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+            <input type="text" id="searchInput" placeholder="Buscar país (ej. España, Japón)..." 
+                class="w-full pl-9 pr-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:bg-white transition-all">
+            <div id="searchResults" class="hidden absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-xl border border-slate-100 max-h-60 overflow-y-auto z-50"></div>
+        </div>
+
+        <!-- Controls / Palette Selectors -->
+        <div class="flex items-center space-x-2">
+            <span class="text-xs font-medium text-slate-500 hidden sm:inline">Color Hover:</span>
+            <div class="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <button data-color="#3b82f6" class="color-btn w-6 h-6 rounded-lg bg-blue-500 ring-2 ring-offset-1 ring-blue-500 transition-all"></button>
+                <button data-color="#10b981" class="color-btn w-6 h-6 rounded-lg bg-emerald-500 transition-all"></button>
+                <button data-color="#f59e0b" class="color-btn w-6 h-6 rounded-lg bg-amber-500 transition-all"></button>
+                <button data-color="#ec4899" class="color-btn w-6 h-6 rounded-lg bg-pink-500 transition-all"></button>
+                <button data-color="#8b5cf6" class="color-btn w-6 h-6 rounded-lg bg-purple-500 transition-all"></button>
+                <button data-color="random" id="randomColorBtn" title="Color aleatorio por país" class="w-6 h-6 rounded-lg bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-white text-[10px] font-bold">✨</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex-1 flex relative overflow-hidden">
+
+        <!-- Map Zoom Controls -->
+        <div class="absolute top-4 left-4 z-10 flex flex-col bg-white/90 backdrop-blur border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+            <button id="zoomInBtn" class="p-2.5 hover:bg-slate-100 text-slate-700 transition-colors border-b border-slate-100" title="Acercar">
+                <i data-lucide="plus" class="w-5 h-5"></i>
+            </button>
+            <button id="zoomOutBtn" class="p-2.5 hover:bg-slate-100 text-slate-700 transition-colors border-b border-slate-100" title="Alejar">
+                <i data-lucide="minus" class="w-5 h-5"></i>
+            </button>
+            <button id="resetZoomBtn" class="p-2.5 hover:bg-slate-100 text-slate-700 transition-colors" title="Restablecer vista">
+                <i data-lucide="rotate-ccw" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <!-- Central Map Viewport -->
+        <main class="flex-1 h-full relative flex items-center justify-center map-container bg-slate-100">
+            <div id="loading" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-100/90 z-30 transition-opacity duration-500">
+                <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                <p class="mt-4 text-slate-600 font-medium text-sm">Cargando mapa interactivo 3D...</p>
+            </div>
+
+            <img id="mapBaseImage" class="map-base-image" src="MapaIdeomas.png" alt="Mapa Mundi"/>
+            <svg id="worldMap" class="w-full h-full svg-world"></svg>
+            <div id="languagePanel" class="language-panel hidden">
+                <span class="language-panel-kicker">Idioma oficial</span>
+                <strong id="languagePanelCountry">País</strong>
+                <span id="languagePanelLanguages">—</span>
+            </div>
+        </main>
+
+        <!-- Right Side Stats Panel -->
+        <aside id="infoPanel" class="w-80 bg-white border-l border-slate-200 p-6 flex flex-col justify-between hidden md:flex z-10 shadow-lg">
+            <div>
+                <div class="flex items-center justify-between pb-4 border-b border-slate-100">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Detalles del País</span>
+                    <span id="countryCodeBadge" class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs font-mono rounded">--</span>
+                </div>
+
+                <div id="panelEmptyState" class="py-12 flex flex-col items-center text-center">
+                    <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 mb-3">
+                        <i data-lucide="mouse-pointer-click" class="w-8 h-8"></i>
+                    </div>
+                    <p class="text-slate-600 font-medium">Ningún país seleccionado</p>
+                    <p class="text-xs text-slate-400 mt-1">Haz clic o pasa el cursor sobre cualquier país del mapa para ver sus estadísticas.</p>
+                </div>
+
+                <div id="panelContent" class="hidden space-y-5 pt-4">
+                    <div class="flex items-center space-x-3">
+                        <span id="panelFlag" class="text-4xl shadow-sm rounded">🏳️</span>
+                        <div>
+                            <h2 id="panelCountryName" class="text-xl font-bold text-slate-900 leading-tight">Nombre</h2>
+                            <p id="panelRegion" class="text-xs font-medium text-blue-600">Región</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 pt-2">
+                        <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span class="text-[10px] uppercase font-bold text-slate-400">Capital</span>
+                            <p id="panelCapital" class="text-sm font-semibold text-slate-800 truncate">--</p>
+                        </div>
+                        <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span class="text-[10px] uppercase font-bold text-slate-400">Población</span>
+                            <p id="panelPopulation" class="text-sm font-semibold text-slate-800">--</p>
+                        </div>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center text-xs py-1.5 border-b border-slate-100">
+                            <span class="text-slate-500">Subregión:</span>
+                            <span id="panelSubregion" class="font-medium text-slate-700">--</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs py-1.5 border-b border-slate-100">
+                            <span class="text-slate-500">Idiomas:</span>
+                            <span id="panelLanguages" class="font-medium text-slate-700 truncate max-w-[150px]">--</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs py-1.5 border-b border-slate-100">
+                            <span class="text-slate-500">Moneda:</span>
+                            <span id="panelCurrency" class="font-medium text-slate-700">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Global Quick Stats Legend -->
+            <div class="pt-4 border-t border-slate-100">
+                <div class="flex justify-between items-center text-xs text-slate-500 mb-2">
+                    <span>Estadística global rápida</span>
+                </div>
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-3 rounded-xl border border-blue-100 text-xs">
+                    <p class="text-slate-600 font-medium">Total de países mapeados: <span class="font-bold text-blue-700">195+</span></p>
+                    <p class="text-[11px] text-slate-400 mt-0.5">Basado en proyecciones GeoJSON actualizadas.</p>
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Hover Tooltip -->
+    <div id="tooltip" class="map-tooltip bg-white/95 backdrop-blur-md border border-slate-200 shadow-2xl rounded-xl p-3.5 text-slate-800 min-w-[200px]">
+        <div class="flex items-center space-x-2.5">
+            <span id="ttFlag" class="text-2xl">🏳️</span>
+            <div>
+                <h3 id="ttName" class="font-bold text-sm text-slate-900 leading-tight">País</h3>
+                <p id="ttRegion" class="text-[10px] font-semibold text-blue-600">Región</p>
+            </div>
+        </div>
+        <div class="mt-2.5 pt-2 border-t border-slate-100 text-xs space-y-1">
+            <div class="flex justify-between">
+                <span class="text-slate-400">Capital:</span>
+                <span id="ttCapital" class="font-medium text-slate-700">--</span>
+            </div>
+            <div class="flex justify-between">
+                <span class="text-slate-400">Población:</span>
+                <span id="ttPop" class="font-medium text-slate-700">--</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* Initialization & Application State */
+        let activeHoverColor = "#3b82f6"; // Default vibrant blue
+        let isRandomColor = false;
+        let selectedCountryPath = null;
+        let countryDataMap = {}; // Stores metadata fetched from RestCountries API
+
+        const svg = d3.select("#worldMap");
+        const tooltip = d3.select("#tooltip");
+        const loading = document.getElementById("loading");
+
+        // Lucide icons initialization
+        lucide.createIcons();
+
+        // Responsive SVG container dimensions
+        let width = window.innerWidth;
+        let height = window.innerHeight - 64; // Subtract header height
+
+        // D3 Projection setup (Natural Earth for aesthetic balance)
+        const projection = d3.geoNaturalEarth1()
+            .scale(width / 5.8)
+            .translate([width / 2.3, height / 2]);
+
+        const pathGenerator = d3.geoPath().projection(projection);
+
+        // Zoom & Pan behavior setup
+        const zoom = d3.zoom()
+            .scaleExtent([1, 12])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            });
+
+        const g = svg.append("g");
+
+        async function fetchCountryMetadata() {
+            try {
+                const response = await fetch("https://restcountries.com/v3.1/all?fields=name,cca3,capital,population,region,subregion,flags,languages,currencies");
+                const data = await response.json();
+                
+                data.forEach(country => {
+                    const langList = country.languages ? Object.values(country.languages).join(", ") : "N/A";
+                    const currList = country.currencies ? Object.values(country.currencies).map(c => c.name).join(", ") : "N/A";
+                    
+                    const record = {
+                        name: country.name.common,
+                        translatedName: country.name.nativeName ? Object.values(country.name.nativeName)[0]?.common || country.name.common : country.name.common,
+                        capital: country.capital?.[0] || "N/A",
+                        population: country.population ? country.population.toLocaleString() : "N/A",
+                        region: country.region || "N/A",
+                        subregion: country.subregion || "N/A",
+                        flag: country.flags?.svg || country.flags?.png || "",
+                        flagEmoji: getEmojiFlag(country.cca3),
+                        languages: langList,
+                        currencies: currList,
+                        languageNames: country.languages ? Object.values(country.languages) : []
+                    };
+                    countryDataMap[country.cca3] = record;
+                    if (country.ccn3) countryDataMap[String(Number(country.ccn3))] = record;
+                });
+            } catch (err) {
+                console.warn("Could not fetch RestCountries API details, using fallback mode.", err);
+            }
+        }
+
+        // Helper function for ISO 3166-1 alpha-3 code to Emoji flag conversion
+        function getEmojiFlag(cca3) {
+            const countryCodeMap = {
+                USA: "🇺🇸", ESP: "🇪🇸", MEX: "🇲🇽", ARG: "🇦🇷", FRA: "🇫🇷", DEU: "🇩🇪", 
+                GBR: "🇬🇧", ITA: "🇮🇹", BRA: "🇧🇷", CAN: "🇨🇦", CHN: "🇨🇳", JPN: "🇯🇵",
+                AUS: "🇦🇺", IND: "🇮🇳", RUS: "🇷🇺", COL: "🇨🇴", CHL: "🇨🇱", PER: "🇵🇪"
+            };
+            return countryCodeMap[cca3] || "🌐";
+        }
+
+        async function renderMap() {
+            await fetchCountryMetadata();
+
+            try {
+                // Fetch high-quality world TopoJSON
+                const response = await fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json");
+                const worldData = await response.json();
+
+                const countries = topojson.feature(worldData, worldData.objects.countries).features;
+
+                // Render paths
+                g.selectAll("path")
+                    .data(countries)
+                    .enter()
+                    .append("path")
+                    .attr("class", "country-path")
+                    .attr("d", pathGenerator)
+                    .attr("data-id", d => d.id)
+                    .classed("supported", d => !!getSupportedLanguageGroup(countryDataMap[String(Number(d.id))] || getFallbackInfo(d)))
+                    .on("mouseover", handleMouseOver)
+                    .on("mousemove", handleMouseMove)
+                    .on("mouseout", handleMouseOut)
+                    .on("click", handleClick);
+
+                // Hide loading spinner
+                loading.classList.add("opacity-0");
+                setTimeout(() => loading.style.display = "none", 500);
+
+            } catch (error) {
+                console.error("Error loading map topology:", error);
+                loading.innerHTML = `<p class="text-red-500 font-medium">Error al cargar el mapa. Por favor recarga la página.</p>`;
+            }
+        }
+
+        function getRandomVibrantColor() {
+            const colors = ["#ef4444", "#f97316", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899"];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        function getSupportedLanguageGroup(info) {
+            const langs = (info.languageNames || (info.languages || "").split(",")).map(v => String(v).toLowerCase());
+            if (langs.some(v => v.includes("spanish") || v.includes("español") || v.includes("espanol"))) return "es";
+            if (langs.some(v => v.includes("portuguese") || v.includes("português") || v.includes("portugues"))) return "pt";
+            if (langs.some(v => v.includes("english") || v.includes("inglés") || v.includes("ingles"))) return "en";
+            // Simplified fallback regions requested by the site specification.
+            const region = String(info.region || "").toLowerCase();
+            const subregion = String(info.subregion || "").toLowerCase();
+            const name = String(info.name || "").toLowerCase();
+            if (name === "brazil" || name === "brasil") return "pt";
+            if (region === "americas" && /south america|sudamerica|sudamérica/.test(subregion) && name !== "brazil" && name !== "brasil") return "es";
+            if (name === "canada" || name === "united states" || name === "estados unidos" || name === "united states of america") return "en";
+            return null;
+        }
+
+        function resolveCountryInfo(d) {
+            return countryDataMap[String(Number(d.id))] || getFallbackInfo(d);
+        }
+
+        function handleMouseOver(event, d) {
+            const countryInfo = resolveCountryInfo(d);
+            const supported = !!getSupportedLanguageGroup(countryInfo);
+            const countryEl = d3.select(this);
+            countryEl.classed("highlighted", true);
+
+            document.getElementById("ttName").innerText = countryInfo.name;
+            document.getElementById("ttRegion").innerText = supported ? "Haz clic para ver el idioma oficial" : "Exploración informativa";
+            document.getElementById("ttCapital").innerText = supported ? (countryInfo.languageNames || []).join(", ") : "";
+            document.getElementById("ttPop").innerText = "";
+            document.getElementById("ttFlag").innerText = countryInfo.flagEmoji || "🌐";
+            tooltip.style("opacity", "1");
+        }
+
+        function handleMouseMove(event) {
+            tooltip
+                .style("left", (event.clientX) + "px")
+                .style("top", (event.clientY) + "px");
+        }
+
+        function handleMouseOut(event, d) {
+            d3.select(this).classed("highlighted", false);
+            tooltip.style("opacity", "0");
+        }
+
+        function handleClick(event, d) {
+            const info = resolveCountryInfo(d);
+            const group = getSupportedLanguageGroup(info);
+            if (!group) return;
+            const official = (info.languageNames || []).join(", ") || "Información no disponible";
+            document.getElementById("languagePanelCountry").innerText = info.name;
+            document.getElementById("languagePanelLanguages").innerText = official;
+            document.getElementById("languagePanel").classList.remove("hidden");
+            window.parent.postMessage({
+                type: "oliv-language-country",
+                languageGroup: group,
+                countryName: info.name,
+                officialLanguages: official
+            }, "*");
+        }
+
+        function getFallbackInfo(d) {
+            return {
+                name: d.properties?.name || "País Desconocido",
+                capital: "Información no disponible",
+                population: "N/A",
+                region: "Global",
+                subregion: "N/A",
+                flagEmoji: "🌐",
+                languages: "N/A",
+                currencies: "N/A"
+            };
+        }
+
+        function updateInfoPanel(info, id) {
+            document.getElementById("panelEmptyState").classList.add("hidden");
+            document.getElementById("panelContent").classList.remove("hidden");
+
+            document.getElementById("countryCodeBadge").innerText = id || "N/A";
+            document.getElementById("panelCountryName").innerText = info.name;
+            document.getElementById("panelRegion").innerText = info.region;
+            document.getElementById("panelCapital").innerText = info.capital;
+            document.getElementById("panelPopulation").innerText = info.population;
+            document.getElementById("panelSubregion").innerText = info.subregion;
+            document.getElementById("panelLanguages").innerText = info.languages;
+            document.getElementById("panelCurrency").innerText = info.currencies;
+            document.getElementById("panelFlag").innerText = info.flagEmoji || "🌐";
+        }
+
+        document.querySelectorAll(".color-btn").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                document.querySelectorAll(".color-btn").forEach(b => b.classList.remove("ring-2", "ring-offset-1", "ring-blue-500"));
+                btn.classList.add("ring-2", "ring-offset-1", "ring-blue-500");
+                
+                isRandomColor = false;
+                activeHoverColor = btn.getAttribute("data-color");
+            });
+        });
+
+        document.getElementById("randomColorBtn").addEventListener("click", () => {
+            isRandomColor = true;
+            document.querySelectorAll(".color-btn").forEach(b => b.classList.remove("ring-2", "ring-offset-1", "ring-blue-500"));
+            document.getElementById("randomColorBtn").classList.add("ring-2", "ring-offset-1", "ring-purple-500");
+        });
+
+        // Map Zoom Controls
+        document.getElementById("zoomInBtn").addEventListener("click", () => {
+            svg.transition().duration(400).call(zoom.scaleBy, 1.4);
+        });
+
+        document.getElementById("zoomOutBtn").addEventListener("click", () => {
+            svg.transition().duration(400).call(zoom.scaleBy, 0.7);
+        });
+
+        document.getElementById("resetZoomBtn").addEventListener("click", () => {
+            svg.transition().duration(500).call(
+                zoom.transform,
+                d3.zoomIdentity
+            );
+        });
+
+        // Search Bar Implementation
+        const searchInput = document.getElementById("searchInput");
+        const searchResults = document.getElementById("searchResults");
+
+        searchInput.addEventListener("input", (e) => {
+            const query = e.target.value.toLowerCase().trim();
+            if (query.length < 2) {
+                searchResults.classList.add("hidden");
+                return;
+            }
+
+            const matches = Object.entries(countryDataMap).filter(([code, info]) => 
+                info.name.toLowerCase().includes(query)
+            ).slice(0, 6);
+
+            if (matches.length > 0) {
+                searchResults.innerHTML = matches.map(([code, info]) => `
+                    <div class="px-4 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between text-xs border-b border-slate-50 last:border-none search-item" data-code="${code}">
+                        <div class="flex items-center space-x-2">
+                            <span>${info.flagEmoji}</span>
+                            <span class="font-medium text-slate-800">${info.name}</span>
+                        </div>
+                        <span class="text-slate-400 text-[10px]">${info.region}</span>
+                    </div>
+                `).join("");
+                searchResults.classList.remove("hidden");
+
+                document.querySelectorAll(".search-item").forEach(item => {
+                    item.addEventListener("click", () => {
+                        const code = item.getAttribute("data-code");
+                        const info = countryDataMap[code];
+                        if (info) {
+                            updateInfoPanel(info, code);
+                            highlightCountryByCode(code);
+                        }
+                        searchResults.classList.add("hidden");
+                        searchInput.value = "";
+                    });
+                });
+            } else {
+                searchResults.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">No se encontraron países</div>`;
+                searchResults.classList.remove("hidden");
+            }
+        });
+
+        function highlightCountryByCode(code) {
+            g.selectAll("path").each(function(d) {
+                if (d.id === code || d.properties?.name === countryDataMap[code]?.name) {
+                    if (selectedCountryPath) {
+                        selectedCountryPath.classed("active", false).style("fill", "#ffffff");
+                    }
+                    const countryEl = d3.select(this);
+                    selectedCountryPath = countryEl;
+                    countryEl.classed("active", true).style("fill", activeHoverColor);
+                }
+            });
+        }
+
+        // Close search list on outside click
+        document.addEventListener("click", (e) => {
+            if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+                searchResults.classList.add("hidden");
+            }
+        });
+
+        // Window resize adjustment
+        window.addEventListener("resize", () => {
+            width = window.innerWidth;
+            height = window.innerHeight - 64;
+            projection.scale(width / 5.8).translate([width / 2.3, height / 2]);
+            g.selectAll("path").attr("d", pathGenerator);
+        });
+
+        // Initialize application on page load
+        window.onload = function() {
+            renderMap();
+        };
+    </script>
+</body>
+</html>
